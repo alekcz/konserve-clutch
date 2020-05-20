@@ -30,9 +30,9 @@
          :mime-type "application/octet-stream"}]])))
 
 (defn prep-read 
-  [id data']
+  [db data']
   (if (contains? data' :_attachments)
-    [(:meta data') (cl/get-attachment id id)]
+    [(:meta data') (cl/get-attachment db (:_id data') (:_id data'))]
     [(:meta data') (:edn-value data')]))
 
 (defn it-exists? 
@@ -41,7 +41,7 @@
   
 (defn get-it 
   [db id]
-  (prep-read id (cl/get-document db id)))
+  (prep-read db (cl/get-document db id)))
 
 (defn delete-it 
   [db id]
@@ -67,16 +67,13 @@
 (defn prep-ex 
   "Doc string"
   [^String message ^Exception e]
-  ; Use print the stack trace when things are going wonky
-  ;(.printStackTrace e)
   (ex-info message {:error (.getMessage e) :cause (.getCause e) :trace (.getStackTrace e)}))
 
 (defn prep-stream 
   "Doc string"
   [attachment]
-  (println attachment)
-  { :input-stream  nil 
-    :size (count attachment)})
+  { :input-stream attachment 
+    :size :unknown})
 
 (defrecord ClutchStore [db serializer read-handlers write-handlers locks]
   PEDNAsyncKeyValueStore
@@ -149,7 +146,7 @@
       (async/thread
         (try
           (let [res (get-it db (str-uuid key))]
-            (if (some? (second res)) 
+            (if (some? (second res))
               (async/put! res-ch (locked-cb (prep-stream (second res))))
               (async/close! res-ch)))
           (catch Exception e (async/put! res-ch (prep-ex "Failed to retrieve binary value from store" e)))))
@@ -198,13 +195,12 @@
     (async/thread 
       (try
         (let [db (if (string? db) (cl/couch db) db)]
-          (cl/create! db)
           (async/put! res-ch
-            (map->ClutchStore {:db db
-                              :serializer serializer
-                              :read-handlers read-handlers
-                              :write-handlers write-handlers
-                              :locks (atom {})})))
+            (map->ClutchStore {:db (cl/get-database db)
+                               :serializer serializer
+                               :read-handlers read-handlers
+                               :write-handlers write-handlers
+                               :locks (atom {})})))
         (catch Exception e (async/put! res-ch (prep-ex "Failed to connect to store" e)))))          
     res-ch))
 

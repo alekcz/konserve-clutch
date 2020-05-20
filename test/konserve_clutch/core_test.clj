@@ -3,6 +3,7 @@
             [clojure.core.async :refer [<!!] :as async]
             [konserve.core :as k]
             [konserve-clutch.core :refer [new-clutch-store delete-store]]
+            [com.ashafa.clutch :as cl]
             [malli.generator :as mg])
   (:import  [clojure.lang ExceptionInfo]))
 
@@ -27,7 +28,7 @@
     (let [_ (println "Writing to store")
           db "write-test"
           conn (str "http://" username ":" password "@localhost:5984/" db)
-          store (<!! (new-clutch-store conn))]
+          store (<!! (new-clutch-store (cl/get-database conn)))]
       (is (not (<!! (k/exists? store :foo))))
       (<!! (k/assoc store :foo :bar))
       (is (<!! (k/exists? store :foo)))
@@ -68,18 +69,17 @@
           db "binary-test"
           conn (str "http://" username ":" password "@localhost:5984/" db)
           store (<!! (new-clutch-store conn))]
-      ;(is (not (<!! (k/exists? store :binbar))))
-      ;(<!! (k/bget store :binbar (fn [ans] (is (nil? ans)))))
+      (is (not (<!! (k/exists? store :binbar))))
+      (<!! (k/bget store :binbar (fn [ans] (is (nil? (:input-stream ans))))))
       (<!! (k/bassoc store :binbar (byte-array (range 10))))
-      (<!! (k/bget store :binbar (fn [{:keys [input-stream] :as resp}]
-                                    (println resp)
-                                    (is (= (map byte (slurp input-stream))
+      (<!! (k/bget store :binbar (fn [res]
+                                    (is (= (map byte (slurp (:input-stream res)))
                                            (range 10))))))
-      ; (<!! (k/bassoc store :binbar (byte-array (map inc (range 10))))) 
-      ; (<!! (k/bget store :binbar (fn [{:keys [input-stream]}]
-      ;                               (is (= (map byte (slurp input-stream))
-      ;                                      (map inc (range 10)))))))                                          
-      ; (is (<!! (k/exists? store :binbar)))
+      (<!! (k/bassoc store :binbar (byte-array (map inc (range 10))))) 
+      (<!! (k/bget store :binbar (fn [res]
+                                    (is (= (map byte (slurp (:input-stream res)))
+                                           (map inc (range 10)))))))                                          
+      (is (<!! (k/exists? store :binbar)))
       (delete-store store))))
   
 (deftest key-test
