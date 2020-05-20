@@ -1,137 +1,190 @@
 (ns konserve-clutch.core
   "CouchDB store implemented with Clutch."
-  (:require [konserve.serializers :as ser]
-            [konserve.protocols :refer [-serialize -deserialize]]
-            [hasch.core :refer [uuid]]
-            [clojure.core.async :as async
-             :refer [<!! <! >! timeout chan alt! go go-loop]]
-            [clojure.edn :as edn]
-            [com.ashafa.clutch :refer [couch create!] :as cl]
+  (:require [clojure.core.async :as async]
+            [konserve.serializers :as ser]
+            [hasch.core :as hasch]
+            [com.ashafa.clutch :as cl]
             [konserve.protocols :refer [PEDNAsyncKeyValueStore
-                                        -exists? -get-in -update-in
+                                        -exists? -get -get-meta
+                                        -update-in -assoc-in -dissoc
                                         PBinaryAsyncKeyValueStore
-                                        -bassoc -bget]]))
+                                        -bassoc -bget
+                                        -serialize -deserialize
+                                        PKeyIterable
+                                        -keys]])
+  (:import  [java.io ByteArrayInputStream StringWriter]))
 
+(set! *warn-on-reflection* 1)
+
+(defn prep-write 
+  [id data]
+  (let [[meta val] data]
+    (if (= String (type val))
+      [{:_id id
+        :meta meta
+        :edn-value val} nil]
+      [{:_id id
+        :meta meta}
+       [{:data val
+         :filename id
+         :mime-type "application/octet-stream"}]])))
+
+(defn prep-read 
+  [id data']
+  (if (contains? data' :_attachments)
+    [(:meta data') (cl/get-attachment id id)]
+    [(:meta data') (:edn-value data')]))
+
+(defn it-exists? 
+  [db id]
+  (cl/document-exists? db id))
+  
+(defn get-it 
+  [db id]
+  (prep-read id (cl/get-document db id)))
+
+(defn delete-it 
+  [db id]
+  (let [doc (cl/get-document db id)]
+    (when doc (cl/delete-document db doc))))
+
+(defn update-it 
+  [db id data]
+  (let [[doc attachment] (prep-write id data)]
+    (delete-it db id)
+    (if attachment
+      (cl/put-document db doc :attachments attachment)
+      (cl/put-document db doc))))
+
+(defn get-keys 
+  [db]
+  (cl/all-documents db))
+
+(defn str-uuid 
+  [key] 
+  (str (hasch/uuid key))) 
+
+(defn prep-ex 
+  "Doc string"
+  [^String message ^Exception e]
+  ; Use print the stack trace when things are going wonky
+  ;(.printStackTrace e)
+  (ex-info message {:error (.getMessage e) :cause (.getCause e) :trace (.getStackTrace e)}))
+
+(defn prep-stream 
+  "Doc string"
+  [attachment]
+  (println attachment)
+  { :input-stream  nil 
+    :size (count attachment)})
 
 (defrecord ClutchStore [db serializer read-handlers write-handlers locks]
   PEDNAsyncKeyValueStore
-  (-exists? [this key]
-    (let [id (str (uuid key))]
-      (go (try (cl/document-exists? db id)
-               (catch Exception e
-                 (ex-info "Could not access edn value."
-                          {:type :access-error
-                           :id id
-                           :key key
-                           :exception e}))))))
-  (-get-in [this key-vec]
-    (let [[fkey & rkey] key-vec
-          id (str (uuid fkey))]
-      (go (try (get-in (->> id
-                            (cl/get-document db)
-                            :edn-value
-                            (-deserialize serializer read-handlers)
-                            second)
-                       rkey)
-               (catch Exception e
-                 (ex-info "Could not read edn value."
-                          {:type :read-error
-                           :id id
-                           :key fkey
-                           :exception e}))))))
-  (-update-in [this key-vec up-fn]
-    (go (try
-          (let [[fkey & rkey] key-vec
-                id (str (uuid fkey))
-                doc (cl/get-document db id)]
-            ((fn trans [doc attempt]
-               (let [old (->> doc :edn-value (-deserialize serializer read-handlers) second)
-                     new (if-not (empty? rkey)
-                           (update-in old rkey up-fn)
-                           (up-fn old))]
-                 (cond (and (not doc) new)
-                       [nil (get-in (->> (cl/put-document db {:_id id
-                                                              :edn-value #_(pr-str [key-vec new])
-                                                              (with-out-str
-                                                                (-serialize serializer
-                                                                            *out*
-                                                                            write-handlers
-                                                                            [key-vec new]))})
-                                         :edn-value
-                                         (-deserialize serializer read-handlers)
-                                         second)
-                                    rkey)]
+  (-exists? [this key] 
+      (let [res-ch (async/chan 1)]
+        (async/thread
+          (try
+            (let [it (it-exists? db (str-uuid key))]
+              (async/put! res-ch it))
+            (catch Exception e (async/put! res-ch (prep-ex "Failed to determine if item exists" e)))))
+        res-ch))
 
-;                       (and (not doc) (not new))
-;                       [nil nil]
-
-;                       (not new)
-;                       (do (cl/delete-document db doc) [(get-in old rkey) nil])
-
-                       :else
-                       (let [old* (get-in old rkey)
-                             new (try (cl/update-document
-                                       db
-                                       doc
-                                       (fn [{v :edn-value :as old}]
-                                         (assoc old
-                                                :edn-value (with-out-str
-                                                             (-serialize
-                                                              serializer
-                                                              *out*
-                                                              write-handlers
-                                                              [key-vec
-                                                               (if-not (empty? rkey)
-                                                                 (update-in (-deserialize
-                                                                             serializer
-                                                                             read-handlers
-                                                                             v)
-                                                                            rkey
-                                                                            up-fn)
-                                                                 (up-fn (-deserialize
-                                                                         serializer
-                                                                         read-handlers
-                                                                         v)))])))))
-                                      (catch clojure.lang.ExceptionInfo e
-                                        (if (< attempt 10)
-                                          (trans (cl/get-document db id) (inc attempt))
-                                          (throw e))))
-                             new* (-> (-deserialize serializer read-handlers (:edn-value new))
-                                      second
-                                      (get-in rkey))]
-                         [old* new*])))) doc 0))
-          (catch Exception e
-            (ex-info "Could not write edn value."
-                     {:type :write-error
-                      :key key-vec
-                      :exception e})))))
-  (-dissoc [this key]
-    (go
-      (let [id (str (uuid key))
-            doc (cl/get-document db id)]
+  (-get [this key] 
+    (let [res-ch (async/chan 1)]
+      (async/thread
         (try
-          (cl/delete-document db doc)
-          nil
-          (catch Exception e
-            (ex-info "Cannot delete key."
-                     {:type :delete-error
-                      :key key
-                      :exception e}))))))
+          (let [res (get-it db (str-uuid key))]
+            (if (some? (second res))
+              (async/put! res-ch (-deserialize serializer read-handlers (second res)))
+              (async/close! res-ch)))
+          (catch Exception e (async/put! res-ch (prep-ex "Failed to retrieve value from store" e)))))
+      res-ch))
+
+  (-get-meta [this key] 
+    (let [res-ch (async/chan 1)]
+      (async/thread
+        (try
+          (let [res (get-it db (str-uuid key))]
+            (if (some? (first res))
+              (async/put! res-ch (-deserialize serializer read-handlers (first res)))
+              (async/close! res-ch)))
+          (catch Exception e (async/put! res-ch (prep-ex "Failed to retrieve value metadata from store" e)))))
+      res-ch))
+
+  (-update-in [this key-vec meta-up-fn up-fn args]
+    (let [res-ch (async/chan 1)]
+      (async/thread
+        (try
+          (let [[fkey & rkey] key-vec
+                [ometa' oval'] (get-it db (str-uuid fkey))
+                old-val [(when ometa'
+                          (-deserialize serializer read-handlers ometa'))
+                         (when oval'
+                          (-deserialize serializer read-handlers oval'))]            
+                [nmeta nval] [(meta-up-fn (first old-val)) 
+                         (if rkey (apply update-in (second old-val) rkey up-fn args) (apply up-fn (second old-val) args))]
+                ^StringWriter mbaos (StringWriter.)
+                ^StringWriter vbaos (StringWriter.)]
+            (when nmeta (-serialize serializer mbaos write-handlers nmeta))
+            (when nval (-serialize serializer vbaos write-handlers nval))
+            (update-it db (str-uuid fkey) [(.toString mbaos) (.toString vbaos)])
+            (async/put! res-ch [(second old-val) nval]))
+          (catch Exception e (async/put! res-ch (prep-ex "Failed to update/write value in store" e)))))
+        res-ch))
+
+  (-assoc-in [this key-vec meta val] (-update-in this key-vec meta (fn [_] val) []))
+
+  (-dissoc [this key] 
+    (let [res-ch (async/chan 1)]
+      (async/thread
+        (try
+          (delete-it db (str-uuid key))
+          (async/close! res-ch)
+          (catch Exception e (async/put! res-ch (prep-ex "Failed to delete key-value pair from store" e)))))
+        res-ch))
 
   PBinaryAsyncKeyValueStore
   (-bget [this key locked-cb]
-    (go (locked-cb
-         {:input-stream (cl/get-attachment db (str (uuid key))
-                                          (pr-str key))})))
-  (-bassoc [this key val]
-    (let [id (str (uuid key))]
-      (go
-        (when-let [doc (cl/get-document db id)]
-          (cl/delete-document db doc))
-        (cl/put-document db {:_id id} :attachments [{:data val
-                                                     :filename (pr-str key)
-                                                     :mime-type "application/octet-stream"}])))))
+    (let [res-ch (async/chan 1)]
+      (async/thread
+        (try
+          (let [res (get-it db (str-uuid key))]
+            (if (some? (second res)) 
+              (async/put! res-ch (locked-cb (prep-stream (second res))))
+              (async/close! res-ch)))
+          (catch Exception e (async/put! res-ch (prep-ex "Failed to retrieve binary value from store" e)))))
+      res-ch))
 
+  (-bassoc [this key meta-up-fn input]
+    (let [res-ch (async/chan 1)]
+      (async/thread
+        (try
+          (let [old-val (get-it db (str-uuid key))
+                old-meta (-deserialize serializer read-handlers (first old-val))
+                new-meta (meta-up-fn old-meta)
+                ^StringWriter mbaos (StringWriter.)]
+            (-serialize serializer mbaos write-handlers new-meta)
+            (update-it db (str-uuid key) [(.toString mbaos) input])
+            (async/put! res-ch [(second old-val) input]))
+          (catch Exception e (async/put! res-ch (prep-ex "Failed to update/write binary value in store" e)))))
+        res-ch))
+
+  PKeyIterable
+  (-keys [_]
+    (let [res-ch (async/chan)]
+      (async/thread
+        (try
+          (let [key-stream (get-keys db)
+                keys' (when key-stream
+                        (for [k key-stream]
+                          (let [meta (first (get-it db (:id k)))]
+                            (-deserialize serializer read-handlers meta))))
+                keys (map :key keys')]
+            (doall
+              (map #(async/put! res-ch %) keys)))
+          (async/close! res-ch) 
+          (catch Exception e (async/put! res-ch (prep-ex "Failed to retrieve keys from store" e)))))
+        res-ch)))
 
 (defn new-clutch-store
   "Constructs a clutch CouchDB store either with name for db or a clutch DB
@@ -141,20 +194,27 @@
          :or {serializer (ser/string-serializer)
               read-handlers (atom {})
               write-handlers (atom {})}}]
-  (let [db (if (string? db) (couch db) db)]
-    (go (try
-          (create! db)
-          (map->ClutchStore {:db db
-                             :serializer serializer
-                             :read-handlers read-handlers
-                             :write-handlers write-handlers
-                             :locks (atom {})})
-          (catch Exception e
-            (ex-info "Cannot open CouchDB."
-                     {:type :db-error
-                      :db db
-                      :exception e}))))))
+  (let [res-ch (async/chan 1)]
+    (async/thread 
+      (try
+        (let [db (if (string? db) (cl/couch db) db)]
+          (cl/create! db)
+          (async/put! res-ch
+            (map->ClutchStore {:db db
+                              :serializer serializer
+                              :read-handlers read-handlers
+                              :write-handlers write-handlers
+                              :locks (atom {})})))
+        (catch Exception e (async/put! res-ch (prep-ex "Failed to connect to store" e)))))          
+    res-ch))
 
-
+(defn delete-store [store]
+  (let [res-ch (async/chan 1)]
+    (async/thread
+      (try
+        (cl/delete-database (:db store))
+        (async/close! res-ch)
+        (catch Exception e (async/put! res-ch (prep-ex "Failed to delete store" e)))))          
+    res-ch))
 
 
