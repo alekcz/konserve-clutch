@@ -15,10 +15,7 @@ A CouchDB implementation of the [konserve kv-protocol](https://github.com/replik
 The purpose of konserve is to have a unified associative key-value interface for
 edn datastructures and binary blobs. Use the standard interface functions of konserve.
 
-You can provide the carmine redis connection specification map to the
-`new-clutch-store` constructor as an argument. We do not require additional
-settings beyond the konserve serialization protocol for the store, so you can
-still access the store through carmine directly wherever you need.
+You can provide a clutch db object or connenction uri to the `new-clutch-store` constructor as an argument. We do not require additional settings beyond the konserve serialization protocol for the store, so you can still access the store through clutch directly wherever you need.
 
 ```clojure
 (require '[konserve-clutch.core :refer :all]
