@@ -1,0 +1,17 @@
+name: Clojure CI
+
+on: [push]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Run tests
+      run: |
+        docker-compose up -d
+        lein cloverage --codecov
+        bash <(curl -s https://codecov.io/bash)
+        docker-compose down
