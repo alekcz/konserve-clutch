@@ -12,7 +12,7 @@
                                         -serialize -deserialize
                                         PKeyIterable
                                         -keys]])
-  (:import  [java.io ByteArrayInputStream StringWriter]))
+  (:import  [java.io StringWriter]))
 
 (set! *warn-on-reflection* 1)
 

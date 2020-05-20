@@ -1,4 +1,4 @@
-(defproject io.replikativ/konserve-clutch "0.1.3"
+(defproject io.replikativ/konserve-clutch "0.1.4-SNAPSHOT"
   :description "A CouchDB backend for konserve with clutch."
   :url "https://github.com/replikativ/konserve-clutch"
   :license {:name "Eclipse Public License"
