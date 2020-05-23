@@ -2,8 +2,9 @@
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.core.async :refer [<!!] :as async]
             [konserve.core :as k]
-            [konserve-clutch.core :refer [new-clutch-store delete-store]]
+            [konserve-clutch.core :refer [new-clutch-store delete-store] :as kcc]
             [com.ashafa.clutch :as cl]
+            [hasch.core :as hasch]
             [malli.generator :as mg])
   (:import  [clojure.lang ExceptionInfo]))
 
@@ -192,6 +193,22 @@
                                     (is (= (pmap byte (slurp input-stream))
                                            sevens)))))
       (delete-store store))))  
+
+(deftest version-test
+  (testing "Test check for version being store with data"
+    (let [_ (println "Check if version is stored")
+          dbname "version-test"
+          conn (str "http://" username ":" password "@localhost:5984/" dbname)
+          store (<!! (new-clutch-store conn))
+          db (cl/get-database conn)
+          id (str (hasch/uuid :foo))]
+      (<!! (k/assoc store :foo :bar))
+      (is (= :bar (<!! (k/get store :foo))))
+      (is (= (byte kcc/version) 
+             (->> (cl/get-document db id) :meta (map byte) byte-array first)))
+      (is (= (byte kcc/version) 
+             (->> (cl/get-attachment db id id) slurp (map byte) byte-array first)))             
+      (delete-store store))))
 
 (deftest exceptions-test
   (testing "Test exception handling"

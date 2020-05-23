@@ -18,13 +18,25 @@
 (def version 1)
 (def sversion \u0001)
 
+(defn add-version [data]
+  (when (seq data) 
+    (if (= String (type data))
+      (str sversion data)
+      (byte-array (into [] (concat [(byte version)] (vec data)))))))
+
+(defn strip-version [data]
+  (when (seq data) 
+    (if (= String (type data))
+      (subs data 1)
+      (byte-array (rest (vec data))))))
+
 (defn prep-string-write
   [id data]
   (let [[meta val] data]
     [{:_id id
-      :meta meta
+      :meta (add-version meta)
       :binary false}
-      [{:data (.getBytes ^String val)
+      [{:data (add-version (.getBytes ^String val))
         :filename id
         :mime-type "application/octet-stream"}]]))
 
@@ -32,9 +44,9 @@
   [id data]
   (let [[meta val] data]
     [{:_id id
-      :meta meta
+      :meta (add-version meta)
       :binary true}
-     [{:data val
+     [{:data (add-version val)
        :filename id
        :mime-type "application/octet-stream"}]]))
 
@@ -46,23 +58,23 @@
   [db id]
   (let [doc (cl/get-document db id)
         attachment (cl/get-attachment db id id)]
-    [(:meta doc) (when attachment (slurp attachment))]))
+    [(-> doc :meta strip-version) (when attachment (-> attachment slurp strip-version))]))
 
 (defn get-it-only-string
   [db id]
   (let [attachment (cl/get-attachment db id id)]
     (when attachment 
-      (slurp attachment))))
+      (-> attachment slurp strip-version))))
 
 (defn get-it-only-binary
   [db id]
   (let [attachment (cl/get-attachment db id id)]
     (when attachment 
-      (->> attachment slurp (map byte) byte-array))))
+      (->> attachment slurp (map byte) byte-array strip-version))))
 
 (defn get-meta
   [db id]
-  (:meta (cl/get-document db id)))
+  (-> (cl/get-document db id) :meta strip-version))
 
 (defn delete-it 
   [db id]
