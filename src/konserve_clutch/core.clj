@@ -12,9 +12,11 @@
                                         -serialize -deserialize
                                         PKeyIterable
                                         -keys]])
-  (:import  [java.io StringWriter]))
+  (:import  [java.io StringWriter ByteArrayInputStream]))
 
 (set! *warn-on-reflection* 1)
+(def version 1)
+(def sversion \u0001)
 
 (defn prep-write 
   [id data]
@@ -38,7 +40,7 @@
   (when data'
     (let [^"[B" attachment (cl/get-attachment db (:_id data') (:_id data'))]
       (if (:binary data')
-        [(:meta data') attachment]
+        [(:meta data') (-> attachment slurp)]
         [(:meta data') (-> attachment slurp (String.))]))))
 
 (defn it-exists? 
@@ -51,7 +53,8 @@
 
 (defn get-it-only
   [db id]
-  (cl/get-attachment db id id))
+  (let [attachment (cl/get-attachment db id id)]
+    (when attachment (slurp attachment))))
 
 (defn get-meta
   [db id]
@@ -82,8 +85,8 @@
 
 (defn prep-stream 
   [attachment]
-  { :input-stream attachment 
-    :size :unknown})
+  { :input-stream (ByteArrayInputStream. attachment)
+    :size (count attachment)})
 
 (defrecord ClutchStore [db serializer read-handlers write-handlers locks]
   PEDNAsyncKeyValueStore
@@ -102,7 +105,7 @@
         (try
           (let [res (get-it-only db (str-uuid key))]
             (if (some? res)
-              (async/put! res-ch (-deserialize serializer read-handlers (-> res slurp (String.))))
+              (async/put! res-ch (-deserialize serializer read-handlers (String. res)))
               (async/close! res-ch)))
           (catch Exception e (async/put! res-ch (prep-ex "Failed to retrieve value from store" e)))))
       res-ch))
