@@ -4,7 +4,6 @@
             [konserve.serializers :as ser]
             [hasch.core :as hasch]
             [com.ashafa.clutch :as cl]
-            [cheshire.core :as json]
             [konserve.protocols :refer [PEDNAsyncKeyValueStore
                                         -exists? -get -get-meta
                                         -update-in -assoc-in -dissoc
@@ -78,12 +77,10 @@
   (str (hasch/uuid key))) 
 
 (defn prep-ex 
-  "Doc string"
   [^String message ^Exception e]
   (ex-info message {:error (.getMessage e) :cause (.getCause e) :trace (.getStackTrace e)}))
 
 (defn prep-stream 
-  "Doc string"
   [attachment]
   { :input-stream attachment 
     :size :unknown})
