@@ -103,9 +103,9 @@
     (let [res-ch (async/chan 1)]
       (async/thread
         (try
-          (let [res (get-it db (str-uuid key))]
-            (if (some? (second res))
-              (async/put! res-ch (-deserialize serializer read-handlers (second res)))
+          (let [res (get-it-only db (str-uuid key))]
+            (if (some? res)
+              (async/put! res-ch (-deserialize serializer read-handlers (-> res slurp (String.))))
               (async/close! res-ch)))
           (catch Exception e (async/put! res-ch (prep-ex "Failed to retrieve value from store" e)))))
       res-ch))
@@ -158,9 +158,9 @@
     (let [res-ch (async/chan 1)]
       (async/thread
         (try
-          (let [res (get-it db (str-uuid key))]
-            (if (some? (second res))
-              (async/put! res-ch (locked-cb (prep-stream (second res))))
+          (let [res (get-it-only db (str-uuid key))]
+            (if (some? res)
+              (async/put! res-ch (locked-cb (prep-stream res)))
               (async/close! res-ch)))
           (catch Exception e (async/put! res-ch (prep-ex "Failed to retrieve binary value from store" e)))))
       res-ch))
@@ -187,7 +187,7 @@
           (let [key-stream (get-keys db)
                 keys' (when key-stream
                         (for [k key-stream]
-                          (let [meta (first (get-it db (:id k)))]
+                          (let [meta (get-meta db (:id k))]
                             (-deserialize serializer read-handlers meta))))
                 keys (map :key keys')]
             (doall
