@@ -71,8 +71,8 @@
           store (<!! (new-clutch-store conn))
           cb (atom false)
           cb2 (atom false)]
-      ; (is (not (<!! (k/exists? store :binbar))))
-      ; (<!! (k/bget store :binbar (fn [ans] (is (nil? (:input-stream ans))))))
+      (is (not (<!! (k/exists? store :binbar))))
+      (<!! (k/bget store :binbar (fn [ans] (is (nil? (:input-stream ans))))))
       (<!! (k/bassoc store :binbar (byte-array (range 30))))
       (<!! (k/bget store :binbar (fn [res]
                                     (reset! cb true)
@@ -83,7 +83,7 @@
                                     (reset! cb2 true)
                                     (is (= (map byte (slurp (:input-stream res)))
                                            (map inc (range 30)))))))                                          
-      ; (is (<!! (k/exists? store :binbar)))
+      (is (<!! (k/exists? store :binbar)))
       (is @cb)
       (is @cb2)
       (delete-store store))))
