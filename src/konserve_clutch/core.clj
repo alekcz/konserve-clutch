@@ -4,6 +4,7 @@
             [konserve.serializers :as ser]
             [hasch.core :as hasch]
             [com.ashafa.clutch :as cl]
+            [cheshire.core :as json]
             [konserve.protocols :refer [PEDNAsyncKeyValueStore
                                         -exists? -get -get-meta
                                         -update-in -assoc-in -dissoc
@@ -22,8 +23,10 @@
     (if (= String (type val))
       [{:_id id
         :meta meta
-        :edn-value val
-        :binary false} nil]
+        :binary false}
+       [{:data (.getBytes ^String val)
+         :filename id
+         :mime-type "application/octet-stream"}]]
       [{:_id id
         :meta meta
         :binary true}
@@ -33,9 +36,11 @@
 
 (defn prep-read 
   [db data']
-  (if (:binary data')
-    [(:meta data') (cl/get-attachment db (:_id data') (:_id data'))]
-    [(:meta data') (:edn-value data')]))
+  (when data'
+    (let [^"[B" attachment (cl/get-attachment db (:_id data') (:_id data'))]
+      (if (:binary data')
+        [(:meta data') attachment]
+        [(:meta data') (-> attachment slurp (String.))]))))
 
 (defn it-exists? 
   [db id]
@@ -44,6 +49,14 @@
 (defn get-it 
   [db id]
   (prep-read db (cl/get-document db id)))
+
+(defn get-it-only
+  [db id]
+  (cl/get-attachment db id id))
+
+(defn get-meta
+  [db id]
+  (:meta (cl/get-document db id)))
 
 (defn delete-it 
   [db id]
@@ -54,9 +67,7 @@
   [db id data]
   (let [[doc attachment] (prep-write id data)]
     (delete-it db id)
-    (if attachment
-      (cl/put-document db doc :attachments attachment)
-      (cl/put-document db doc))))
+    (cl/put-document db doc :attachments attachment)))
 
 (defn get-keys 
   [db]
@@ -103,9 +114,9 @@
     (let [res-ch (async/chan 1)]
       (async/thread
         (try
-          (let [res (get-it db (str-uuid key))]
-            (if (some? (first res))
-              (async/put! res-ch (-deserialize serializer read-handlers (first res)))
+          (let [res (get-meta db (str-uuid key))]
+            (if (some? res)
+              (async/put! res-ch (-deserialize serializer read-handlers res))
               (async/close! res-ch)))
           (catch Exception e (async/put! res-ch (prep-ex "Failed to retrieve value metadata from store" e)))))
       res-ch))
