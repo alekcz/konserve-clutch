@@ -18,30 +18,25 @@
 (def version 1)
 (def sversion \u0001)
 
-(defn prep-write 
+(defn prep-string-write
   [id data]
   (let [[meta val] data]
-    (if (= String (type val))
-      [{:_id id
-        :meta meta
-        :binary false}
-       [{:data (.getBytes ^String val)
-         :filename id
-         :mime-type "application/octet-stream"}]]
-      [{:_id id
-        :meta meta
-        :binary true}
-       [{:data val
-         :filename id
-         :mime-type "application/octet-stream"}]])))
+    [{:_id id
+      :meta meta
+      :binary false}
+      [{:data (.getBytes ^String val)
+        :filename id
+        :mime-type "application/octet-stream"}]]))
 
-(defn prep-read 
-  [db data']
-  (when data'
-    (let [^"[B" attachment (cl/get-attachment db (:_id data') (:_id data'))]
-      (if (:binary data')
-        [(:meta data') (-> attachment slurp)]
-        [(:meta data') (-> attachment slurp (String.))]))))
+(defn prep-binary-write 
+  [id data]
+  (let [[meta val] data]
+    [{:_id id
+      :meta meta
+      :binary true}
+     [{:data val
+       :filename id
+       :mime-type "application/octet-stream"}]]))
 
 (defn it-exists? 
   [db id]
@@ -49,12 +44,21 @@
   
 (defn get-it 
   [db id]
-  (prep-read db (cl/get-document db id)))
+  (let [doc (cl/get-document db id)
+        attachment (cl/get-attachment db id id)]
+    [(:meta doc) (when attachment (slurp attachment))]))
 
-(defn get-it-only
+(defn get-it-only-string
   [db id]
   (let [attachment (cl/get-attachment db id id)]
-    (when attachment (slurp attachment))))
+    (when attachment 
+      (slurp attachment))))
+
+(defn get-it-only-binary
+  [db id]
+  (let [attachment (cl/get-attachment db id id)]
+    (when attachment 
+      (->> attachment slurp (map byte) byte-array))))
 
 (defn get-meta
   [db id]
@@ -67,7 +71,13 @@
 
 (defn update-it 
   [db id data]
-  (let [[doc attachment] (prep-write id data)]
+  (let [[doc attachment] (prep-string-write id data)]
+    (delete-it db id)
+    (cl/put-document db doc :attachments attachment)))
+
+(defn update-binary
+  [db id data]
+  (let [[doc attachment] (prep-binary-write id data)]
     (delete-it db id)
     (cl/put-document db doc :attachments attachment)))
 
@@ -103,9 +113,9 @@
     (let [res-ch (async/chan 1)]
       (async/thread
         (try
-          (let [res (get-it-only db (str-uuid key))]
+          (let [res (get-it-only-string db (str-uuid key))]
             (if (some? res)
-              (async/put! res-ch (-deserialize serializer read-handlers (String. res)))
+              (async/put! res-ch (-deserialize serializer read-handlers res))
               (async/close! res-ch)))
           (catch Exception e (async/put! res-ch (prep-ex "Failed to retrieve value from store" e)))))
       res-ch))
@@ -158,7 +168,7 @@
     (let [res-ch (async/chan 1)]
       (async/thread
         (try
-          (let [res (get-it-only db (str-uuid key))]
+          (let [res (get-it-only-binary db (str-uuid key))]
             (if (some? res)
               (async/put! res-ch (locked-cb (prep-stream res)))
               (async/close! res-ch)))
@@ -174,7 +184,7 @@
                 new-meta (meta-up-fn old-meta)
                 ^StringWriter mbaos (StringWriter.)]
             (-serialize serializer mbaos write-handlers new-meta)
-            (update-it db (str-uuid key) [(.toString mbaos) input])
+            (update-binary db (str-uuid key) [(.toString mbaos) input])
             (async/put! res-ch [(second old-val) input]))
           (catch Exception e (async/put! res-ch (prep-ex "Failed to update/write binary value in store" e)))))
         res-ch))

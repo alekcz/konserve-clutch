@@ -68,18 +68,24 @@
     (let [_ (println "Reading and writing binary data")
           db "binary-test"
           conn (str "http://" username ":" password "@localhost:5984/" db)
-          store (<!! (new-clutch-store conn))]
-      (is (not (<!! (k/exists? store :binbar))))
-      (<!! (k/bget store :binbar (fn [ans] (is (nil? (:input-stream ans))))))
-      (<!! (k/bassoc store :binbar (byte-array (range 10))))
+          store (<!! (new-clutch-store conn))
+          cb (atom false)
+          cb2 (atom false)]
+      ; (is (not (<!! (k/exists? store :binbar))))
+      ; (<!! (k/bget store :binbar (fn [ans] (is (nil? (:input-stream ans))))))
+      (<!! (k/bassoc store :binbar (byte-array (range 30))))
       (<!! (k/bget store :binbar (fn [res]
+                                    (reset! cb true)
                                     (is (= (map byte (slurp (:input-stream res)))
-                                           (range 10))))))
-      (<!! (k/bassoc store :binbar (byte-array (map inc (range 10))))) 
+                                           (range 30))))))
+      (<!! (k/bassoc store :binbar (byte-array (map inc (range 30))))) 
       (<!! (k/bget store :binbar (fn [res]
+                                    (reset! cb2 true)
                                     (is (= (map byte (slurp (:input-stream res)))
-                                           (map inc (range 10)))))))                                          
-      (is (<!! (k/exists? store :binbar)))
+                                           (map inc (range 30)))))))                                          
+      ; (is (<!! (k/exists? store :binbar)))
+      (is @cb)
+      (is @cb2)
       (delete-store store))))
   
 (deftest key-test
