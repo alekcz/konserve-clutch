@@ -22,16 +22,18 @@
     (if (= String (type val))
       [{:_id id
         :meta meta
-        :edn-value val} nil]
+        :edn-value val
+        :binary false} nil]
       [{:_id id
-        :meta meta}
+        :meta meta
+        :binary true}
        [{:data val
          :filename id
          :mime-type "application/octet-stream"}]])))
 
 (defn prep-read 
   [db data']
-  (if (contains? data' :_attachments)
+  (if (:binary data')
     [(:meta data') (cl/get-attachment db (:_id data') (:_id data'))]
     [(:meta data') (:edn-value data')]))
 
