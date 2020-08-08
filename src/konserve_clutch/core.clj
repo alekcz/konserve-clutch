@@ -15,28 +15,32 @@
   (:import  [java.io StringWriter ByteArrayInputStream]))
 
 (set! *warn-on-reflection* 1)
-(def version 1)
-(def sversion \u0001)
+(def store-layout 1)
+(def serializer 1)
+(def compressor 0)
+(def encryptor 0)
 
-(defn add-version [data]
+(defn add-header [data]
   (when (seq data) 
     (if (= String (type data))
-      (str sversion data)
-      (byte-array (into [] (concat [(byte version)] (vec data)))))))
+      (str (char store-layout) (char serializer) (char compressor) (char encryptor) data)
+      (byte-array (into [] (concat 
+                            [(byte store-layout) (byte serializer) (byte compressor) (byte encryptor)] 
+                            (vec data)))))))
 
-(defn strip-version [data]
+(defn strip-header [data]
   (when (seq data) 
     (if (= String (type data))
-      (subs data 1)
-      (byte-array (rest (vec data))))))
+      (subs data 4)
+      (byte-array (->> data vec (split-at 4) second)))))
 
 (defn prep-string-write
   [id data]
   (let [[meta val] data]
     [{:_id id
-      :meta (add-version meta)
+      :meta (add-header meta)
       :binary false}
-      [{:data (add-version (.getBytes ^String val))
+      [{:data (add-header (.getBytes ^String val))
         :filename id
         :mime-type "application/octet-stream"}]]))
 
@@ -44,9 +48,9 @@
   [id data]
   (let [[meta val] data]
     [{:_id id
-      :meta (add-version meta)
+      :meta (add-header meta)
       :binary true}
-     [{:data (add-version val)
+     [{:data (add-header val)
        :filename id
        :mime-type "application/octet-stream"}]]))
 
@@ -58,23 +62,23 @@
   [db id]
   (let [doc (cl/get-document db id)
         attachment (cl/get-attachment db id id)]
-    [(-> doc :meta strip-version) (when attachment (-> attachment slurp strip-version))]))
+    [(-> doc :meta strip-header) (when attachment (-> attachment slurp strip-header))]))
 
 (defn get-it-only-string
   [db id]
   (let [attachment (cl/get-attachment db id id)]
     (when attachment 
-      (-> attachment slurp strip-version))))
+      (-> attachment slurp strip-header))))
 
 (defn get-it-only-binary
   [db id]
   (let [attachment (cl/get-attachment db id id)]
     (when attachment 
-      (->> attachment slurp (map byte) byte-array strip-version))))
+      (->> attachment slurp (map byte) byte-array strip-header))))
 
 (defn get-meta
   [db id]
-  (-> (cl/get-document db id) :meta strip-version))
+  (-> (cl/get-document db id) :meta strip-header))
 
 (defn delete-it 
   [db id]
